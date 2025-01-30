@@ -1,4 +1,6 @@
-﻿using Game.Achievements;
+﻿//#define DEBUG // Enable when developing this mod for verbose console logging
+
+using Game.Achievements;
 using Game.Interface;
 using Game.Services;
 using HarmonyLib;
@@ -13,8 +15,6 @@ using SML;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
-using System.Text.RegularExpressions;
 using TMPro;
 using UnityEngine;
 
@@ -69,7 +69,29 @@ public class AchievementTracker
                 AvailableInGame = true,
                 OnChanged = (val) =>
                 {
-                    if (achievementTrackerGO is not null)
+                    // Don't bother changing it if it's not the hidden achievement
+                    if (achievementTrackerGO is not null && !achievementTrackerGO.GetComponent<AchievementTrackerUIController>().isLastHidden)
+                        achievementTrackerGO.GetComponent<AchievementTrackerUIController>().ShowAchievementText(3, val);
+                }
+            };
+        }
+    }
+
+    public ModSettings.CheckboxSetting SeeCompletionText
+    {
+        get
+        {
+            return new()
+            {
+                Name = "See Completion Text",
+                Description = "Enable text showing that you have completed all achievements for the role",
+                DefaultValue = true,
+                Available = true,
+                AvailableInGame = true,
+                OnChanged = (val) =>
+                {
+                    // Don't bother changing it if it's not the completion text
+                    if (achievementTrackerGO is not null && achievementTrackerGO.GetComponent<AchievementTrackerUIController>().lastIsCompletionText)
                         achievementTrackerGO.GetComponent<AchievementTrackerUIController>().ShowAchievementText(3, val);
                 }
             };
@@ -124,52 +146,41 @@ public class AchievementTracker
         EarnedAchievementsMessage earnedAchievementsMessage = (EarnedAchievementsMessage)message;
         var earnedAchievements = earnedAchievementsMessage.Data.AchievementsOwned;
 
-        foreach (var achievementInfoList in RoleToAchievements.Values)
+        var toUpdate = RoleToAchievements.Values.SelectMany(list => list).Where(achievement => earnedAchievements.Contains(achievement.Achievement.id));
+
+        foreach (var achievement in toUpdate)
         {
-            foreach (var achievementInfo in achievementInfoList)
-            {
-                if (earnedAchievements.Contains(achievementInfo.Achievement.id))
-                    achievementInfo.Earned = true;
-            }
+            achievement.Earned = true;
         }
 
-        //foreach (var (k, v) in AchievementTracker.RoleToAchievements)
-        //{
-        //    Console.WriteLine($"{k}\n\t{v.Select(ach => $"{ach.Earned}\t{ach.Name}\n\t\t{ach.Description}").Join(delimiter: "\n\t")}");
-        //}
+#if DEBUG
+        foreach (var (k, v) in AchievementTracker.RoleToAchievements)
+        {
+            Console.WriteLine($"{k}\n\t{v.Select(ach => $"{ach.Earned}\t{ach.Name}\n\t\t{ach.Description}").Join(delimiter: "\n\t")}");
+        }
+#endif
     }
 
     // Info about any new acheivements the client earns during a game
     public static void OnEarnNewAchievement(IncomingHomeMessage message)
     {
         EarnedAchievementMessage m = (EarnedAchievementMessage)message;
-        foreach (var achievementInfoList in RoleToAchievements.Values)
-        {
-            foreach (var achievementInfo in achievementInfoList)
-            {
-                if (achievementInfo.Achievement.id == m.Data.AchievementID)
-                    achievementInfo.Earned = true;
-            }
-        }
+
+        var trackedAchievement = RoleToAchievements.Values
+            .SelectMany(list => list)
+            .First(x => x.Achievement.id == m.Data.AchievementID);
+
+        trackedAchievement.Earned = true;
 
         // Update -- strikethrough achievement
-        if (Service.Game.Sim.simulation != null)
+        if (Service.Game.Sim.simulation != null && achievementTrackerGO != null)
         {
             string role = Pepper.GetMyCurrentIdentity().role.ToString().ToLower();
             var controller = achievementTrackerGO.GetComponent<AchievementTrackerUIController>();
+            if (controller == null) return;
 
-            if (role == controller.trackedRole)
-            {
-                List<AchievementInfo> achievements = RoleToAchievements[role].ToList();
-                for (int i = 0; i < achievements.Count; i++)
-                {
-                    if (achievements[i].Achievement.id == m.Data.AchievementID && ShouldShowAchievementChange(m.Data.AchievementID))
-                    {
-                        controller.SetAchievementText(achievements[i].Name, achievements[i].Description, i, achievements[i].Earned);
-                        break;
-                    }
-                }
-            }
+            // This will do nothing if the achievement is not currently being displayed, so getting achievements from past games is safe.
+            if (ShouldShowAchievementChange(m.Data.AchievementID)) controller.UpdateExistingAchievement(trackedAchievement.Name, true);
         }
     }
 
@@ -209,10 +220,12 @@ public class AchievementServicePatch
             AchievementTracker.RoleToAchievements[role].Add(info);
         }
 
-        //foreach (var (k, v) in AchievementTracker.RoleToAchievements)
-        //{
-        //    Console.WriteLine($"{k} -- {v.Select(ach => ach.Name).Join()}");
-        //}
+#if DEBUG
+        foreach (var (k, v) in AchievementTracker.RoleToAchievements)
+        {
+            Console.WriteLine($"{k} -- {v.Select(ach => ach.Name).Join()}");
+        }
+#endif
     }
 }
 
@@ -251,6 +264,10 @@ public class AchievementTrackerUIController : MonoBehaviour
     TMP_Text AchievementText2;
     TMP_Text AchievementText3;
     TMP_Text AchievementText4;
+
+    public bool isLastHidden = true;
+    public bool lastIsCompletionText = false;
+
     public String trackedRole;
 
     private void Start()
@@ -329,6 +346,47 @@ public class AchievementTrackerUIController : MonoBehaviour
         }
     }
 
+    public void UpdateExistingAchievement(string textTitle, bool earned)
+    {
+        // There is no association between title object and text object. 
+        TMP_Text title = null;
+        TMP_Text text = null;
+        if (textTitle == AchievementTitle1.text)
+        {
+            title = AchievementTitle1;
+            text = AchievementText1;
+        }
+        else if (textTitle == AchievementTitle2.text)
+        {
+            title = AchievementTitle1;
+            text = AchievementText1;
+        }
+        else if (textTitle == AchievementTitle3.text)
+        {
+            title = AchievementTitle1;
+            text = AchievementText1;
+        }
+        else if (textTitle == AchievementTitle4.text)
+        {
+            title = AchievementTitle1;
+            text = AchievementText1;
+        }
+
+        if (title == null || text == null) return;
+
+        Color color = Color.white;
+        var newtitle = title.text;
+        var newdesc = text.text;
+        if (earned)
+        {
+            newtitle = $"<s>{title.text}</s>";
+            newdesc = $"<s>{text.text}</s>";
+            color = new Color(0.8f, 0.8f, 0.8f, 0.8f);
+        }
+
+        quickSetAchievementData(ref title, ref text, newtitle, newdesc, color);
+    }
+
     internal void quickSetAchievementData(ref TMP_Text title, ref TMP_Text text, string str_title, string desc, Color color, bool should_be_active = true)
     {
         if (title is null || text is null) CacheObjects();
@@ -367,6 +425,57 @@ public class AchievementTrackerUIController : MonoBehaviour
         }
     }
 
+    public void SetupUI(string currentRole)
+    {
+        // Stop showing all tracked achievements incase there are no achievements for the new role
+        const int MAX_ACHIEVEMENTS_PER_ROLE = 4;
+        for (int i = 0; i < MAX_ACHIEVEMENTS_PER_ROLE; i++)
+        {
+            ShowAchievementText(i, false);
+        }
+
+        List<AchievementInfo> achievements = AchievementTracker.RoleToAchievements[currentRole].Skip(4).ToList();
+        var completed = true;
+
+        // Check regular role achievements
+        for (int i = 0; i < achievements.Count; i++)
+        {
+            SetAchievementText(achievements[i].Name, achievements[i].Description, i, achievements[i].Earned);
+            ShowAchievementText(i, true);
+            if (!achievements[i].Earned) completed = false;
+        }
+
+        // Check win achievements
+        if (completed)
+        {
+            achievements = AchievementTracker.RoleToAchievements[currentRole].ToList();
+            for (int i = 0; i < MAX_ACHIEVEMENTS_PER_ROLE; i++)
+            {
+                isLastHidden = false;
+                SetAchievementText(achievements[i].Name, achievements[i].Description, i, achievements[i].Earned);
+                if (!achievements[i].Earned) completed = false;
+            }
+        }
+
+        // At this point, all role achievements have been completed, inform the user if they have that setting enabled
+        if (completed)
+        {
+            for (int i = 0; i < MAX_ACHIEVEMENTS_PER_ROLE; i++)
+            {
+                ShowAchievementText(i, false);
+            }
+
+            if (ModSettings.GetBool("See Completion Text"))
+            {
+                lastIsCompletionText = true;
+                ShowAchievementText(3, true);
+                SetAchievementText("Completed", "All role achievements completed", 3, false);
+            }
+        }
+
+        trackedRole = currentRole;
+    }
+
     internal void DisableAllAcheivement()
     {
 
@@ -396,34 +505,7 @@ public class RoleCardElementsPanelPatch
         var controller = go.GetComponent<AchievementTrackerUIController>();
 
         string currentRole = Pepper.GetMyCurrentIdentity().role.ToString().ToLower();
-        // dumb hack but win achievements are always the first 4 i think , and it won't skip pirate hidden achievement , and it will work in other languages (hopefully)
-        List<AchievementInfo> achievements = AchievementTracker.RoleToAchievements[currentRole].Skip<AchievementInfo>(4).ToList();
-        var completed = true;
-        for (int i = 0; i < achievements.Count; i++)
-        {
-            controller.SetAchievementText(achievements[i].Name, achievements[i].Description, i, achievements[i].Earned);
-            if (!achievements[i].Earned) completed = false;
-        }
-        // if all role related achivement were completed, display the victory achivements missing
-        if (completed)
-        {
-            achievements = AchievementTracker.RoleToAchievements[currentRole].ToList();
-            for (int i = 0; i < 4; i++)
-            {
-                controller.SetAchievementText(achievements[i].Name, achievements[i].Description, i, achievements[i].Earned);
-                if (!achievements[i].Earned) completed = false;
-            }
-        }
-        // if all roles achievements and all win achievement were completed, display all achievements completed message
-        if (completed)
-        {
-            controller.SetAchievementText("Completed", "All role achievements completed", 0, false);
-            for (int i = 1; i < 4; i++)
-            {
-                controller.ShowAchievementText(i, false);
-            }
-        }
-        controller.trackedRole = currentRole;
+        controller.SetupUI(currentRole);
 
         StateProperty<PlayerIdentityData> myIdentity = Service.Game.Sim.simulation.myIdentity;
         myIdentity.OnChanged = (Action<PlayerIdentityData>)Delegate.Combine(myIdentity.OnChanged, new Action<PlayerIdentityData>(HandleOnMyIdentityChanged));
@@ -448,42 +530,8 @@ public class RoleCardElementsPanelPatch
 
         var controller = AchievementTracker.achievementTrackerGO.GetComponent<AchievementTrackerUIController>();
         var currentRole = data.role.ToString().ToLower();
-        if (Service.Game.Sim.simulation != null && currentRole != controller.trackedRole)
-        {
-            // Stop showing all tracked achievements incase there are no achievements for the new role
-            const int MAX_ACHIEVEMENTS_PER_ROLE = 4;
-            for (int i = 0; i < MAX_ACHIEVEMENTS_PER_ROLE; i++)
-            {
-                controller.ShowAchievementText(i, false);
-            }
+        if (Service.Game.Sim.simulation == null || currentRole == controller.trackedRole) return;
 
-            List<AchievementInfo> achievements = AchievementTracker.RoleToAchievements[currentRole].Skip<AchievementInfo>(4).ToList();
-            var completed = true;
-            for (int i = 0; i < achievements.Count; i++)
-            {
-                controller.SetAchievementText(achievements[i].Name, achievements[i].Description, i, achievements[i].Earned);
-                controller.ShowAchievementText(i, true);
-                if (!achievements[i].Earned) completed = false;
-            }
-            if (completed)
-            {
-                achievements = AchievementTracker.RoleToAchievements[currentRole].ToList();
-                for (int i = 0; i < 4; i++)
-                {
-                    controller.SetAchievementText(achievements[i].Name, achievements[i].Description, i, achievements[i].Earned);
-                    if (!achievements[i].Earned) completed = false;
-                }
-            }
-            if (completed)
-            {
-                controller.SetAchievementText("Completed", "All role achievements completed", 0, false);
-                for (int i = 1; i < 4; i++)
-                {
-                    controller.ShowAchievementText(i, false);
-                }
-            }
-
-            controller.trackedRole = currentRole;
-        }
+        controller.SetupUI(currentRole);
     }
 }
