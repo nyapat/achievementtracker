@@ -358,18 +358,18 @@ public class AchievementTrackerUIController : MonoBehaviour
         }
         else if (textTitle == AchievementTitle2.text)
         {
-            title = AchievementTitle1;
-            text = AchievementText1;
+            title = AchievementTitle2;
+            text = AchievementText2;
         }
         else if (textTitle == AchievementTitle3.text)
         {
-            title = AchievementTitle1;
-            text = AchievementText1;
+            title = AchievementTitle3;
+            text = AchievementText3;
         }
         else if (textTitle == AchievementTitle4.text)
         {
-            title = AchievementTitle1;
-            text = AchievementText1;
+            title = AchievementTitle4;
+            text = AchievementText4;
         }
 
         if (title == null || text == null) return;
