@@ -1,4 +1,4 @@
-﻿//#define DEBUG // Enable when developing this mod for verbose console logging
+﻿//#define DEBUG_MOD // Enable when developing this mod for verbose console logging
 
 using Game.Achievements;
 using Game.Interface;
@@ -153,7 +153,7 @@ public class AchievementTracker
             achievement.Earned = true;
         }
 
-#if DEBUG
+#if DEBUG_MOD
         foreach (var (k, v) in AchievementTracker.RoleToAchievements)
         {
             Console.WriteLine($"{k}\n\t{v.Select(ach => $"{ach.Earned}\t{ach.Name}\n\t\t{ach.Description}").Join(delimiter: "\n\t")}");
@@ -220,7 +220,7 @@ public class AchievementServicePatch
             AchievementTracker.RoleToAchievements[role].Add(info);
         }
 
-#if DEBUG
+#if DEBUG_MOD
         foreach (var (k, v) in AchievementTracker.RoleToAchievements)
         {
             Console.WriteLine($"{k} -- {v.Select(ach => ach.Name).Join()}");
