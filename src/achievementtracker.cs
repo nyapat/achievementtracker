@@ -268,7 +268,7 @@ public class AchievementTrackerUIController : MonoBehaviour
     public bool isLastHidden = true;
     public bool lastIsCompletionText = false;
 
-    public String trackedRole;
+    public String trackedRole = null;
 
     private void Start()
     {
@@ -432,6 +432,20 @@ public class AchievementTrackerUIController : MonoBehaviour
         for (int i = 0; i < MAX_ACHIEVEMENTS_PER_ROLE; i++)
         {
             ShowAchievementText(i, false);
+        }
+
+        // Do not consider when the role changes; we cannot gain achievements for that role.
+        // And this will fix issues with roles not in the dictionary.
+        if (trackedRole is not null) currentRole = trackedRole;
+        if (!AchievementTracker.RoleToAchievements.ContainsKey(currentRole))
+        {
+            // If it doesn't contain, the rest of this will throw, so whatever
+            for (int i = 0; i < MAX_ACHIEVEMENTS_PER_ROLE; i++) 
+            { 
+                ShowAchievementText(i, false); 
+            }
+
+            return;
         }
 
         List<AchievementInfo> achievements = AchievementTracker.RoleToAchievements[currentRole].Skip(4).ToList();
